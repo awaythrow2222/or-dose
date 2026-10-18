@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OR Dose</title>
+  <meta name="description" content="Weight-based anesthesia dose and volume calculator with a pediatric section.">
+  <meta name="theme-color" content="#00909e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="OR Dose">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-tab="adult">
+
+  <header class="topbar">
+    <h1 id="page-title">Adult</h1>
+    <button id="new-patient" class="icon-btn" type="button" aria-label="New patient" disabled>
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z" fill="currentColor"/></svg>
+    </button>
+  </header>
+
+  <div id="summary" class="summary" hidden></div>
+
+  <main id="main">
+
+    <!-- Patient entry (shared by Adult and Pediatrics) -->
+    <section id="patient-card" class="card" aria-label="Patient">
+      <div class="fields">
+        <div class="field">
+          <label for="in-age">Age</label>
+          <input id="in-age" type="text" inputmode="decimal" autocomplete="off" placeholder="—" enterkeyhint="done">
+          <div class="seg" id="seg-age" role="group" aria-label="Age unit">
+            <button type="button" data-v="years" class="on">yr</button>
+            <button type="button" data-v="months">mo</button>
+            <button type="button" data-v="days">d</button>
+          </div>
+        </div>
+        <div class="field required" id="field-weight">
+          <label for="in-weight">Weight <span class="req" aria-hidden="true">*</span></label>
+          <input id="in-weight" type="text" inputmode="decimal" autocomplete="off" placeholder="0" enterkeyhint="done" aria-required="true">
+          <div class="seg" id="seg-weight" role="group" aria-label="Weight unit">
+            <button type="button" data-v="kg" class="on">kg</button>
+            <button type="button" data-v="lb">lb</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="in-height">Height</label>
+          <input id="in-height" type="text" inputmode="decimal" autocomplete="off" placeholder="—" enterkeyhint="done">
+          <div class="seg" id="seg-height" role="group" aria-label="Height unit">
+            <button type="button" data-v="cm" class="on">cm</button>
+            <button type="button" data-v="inches">in</button>
+          </div>
+        </div>
+      </div>
+      <div class="sex-row" id="sex-row">
+        <span class="sex-label">Sex</span>
+        <div class="seg wide" id="seg-sex" role="group" aria-label="Sex">
+          <button type="button" data-v="male">Male</button>
+          <button type="button" data-v="female">Female</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="warnings"></div>
+
+    <!-- ADULT -->
+    <section id="tab-adult" class="tab">
+      <div id="adult-empty" class="empty">
+        <div class="empty-icon" aria-hidden="true">⚖</div>
+        <h2>Enter a weight to begin</h2>
+        <p>Weight is the only required field. Add height and sex to unlock ideal and adjusted body weight dosing.</p>
+      </div>
+      <div id="adult-body" hidden>
+        <details id="metrics-card" class="card metrics">
+          <summary><span class="h">Calculated values</span><span id="metrics-summary" class="muted small"></span></summary>
+          <div id="metrics-grid" class="tiles"></div>
+          <div id="metrics-notes"></div>
+        </details>
+        <div id="adult-meds"></div>
+      </div>
+    </section>
+
+    <!-- PEDIATRICS -->
+    <section id="tab-peds" class="tab" hidden>
+      <div id="peds-estimate"></div>
+      <div class="seg wide" id="seg-peds" role="tablist" aria-label="Pediatric section">
+        <button type="button" data-v="airway" class="on">Airway</button>
+        <button type="button" data-v="meds">Meds</button>
+        <button type="button" data-v="fluids">Fluids &amp; Resus</button>
+      </div>
+      <div id="peds-airway"></div>
+      <div id="peds-meds" hidden></div>
+      <div id="peds-fluids" hidden></div>
+    </section>
+
+    <!-- INFO -->
+    <section id="tab-info" class="tab" hidden>
+      <div class="card">
+        <h2 class="h">Display</h2>
+        <label class="row toggle"><span>Keep screen awake</span><input type="checkbox" id="pref-awake"></label>
+        <p class="muted small" id="awake-note">Uses the browser's screen wake lock where supported.</p>
+        <div class="row"><span>Appearance</span>
+          <div class="seg" id="seg-theme" role="group" aria-label="Appearance">
+            <button type="button" data-v="system">System</button>
+            <button type="button" data-v="light">Light</button>
+            <button type="button" data-v="dark">Dark</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="h">Important</h2>
+        <div id="disclaimer-text" class="disclaimer"></div>
+      </div>
+
+      <div class="card">
+        <h2 class="h">Weight formulas</h2>
+        <dl class="formulas">
+          <dt>Ideal body weight (Devine)</dt><dd>Male 50 kg, female 45.5 kg, plus 2.3 kg per inch over 60 in. Requires height ≥ 140 cm. If TBW is below IBW, TBW is used.</dd>
+          <dt>Adjusted body weight</dt><dd>IBW + 0.4 × (TBW − IBW). Equals TBW when TBW ≤ IBW.</dd>
+          <dt>Lean body weight (Janmahasatian)</dt><dd>Male: 9270·W / (6680 + 216·BMI). Female: 9270·W / (8780 + 244·BMI).</dd>
+          <dt>BSA (Mosteller)</dt><dd>√(height cm × weight kg / 3600).</dd>
+          <dt>Maintenance fluid (4-2-1)</dt><dd>4 mL/kg/hr for the first 10 kg, 2 mL/kg/hr for the next 10 kg, 1 mL/kg/hr above 20 kg.</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2 class="h">Pediatric estimates</h2>
+        <dl class="formulas">
+          <dt>Weight from age</dt><dd>Neonate 3.5 kg; 1–11 months: months/2 + 4; 1–10 years: 2 × (age + 4); over 10 years: 3 × age.</dd>
+          <dt>Endotracheal tube</dt><dd>Cuffed: age/4 + 3.5. Uncuffed: age/4 + 4. Rounded to 0.5 mm (ties down). Infants and neonates use age/weight tables.</dd>
+          <dt>ETT depth at lip</dt><dd>Neonate: weight + 6. Infant: 3 × ETT size. Child: age/2 + 12 cm.</dd>
+          <dt>LMA size</dt><dd>By weight: &lt;5 kg #1, 5–10 #1.5, 10–20 #2, 20–30 #2.5, 30–50 #3, 50–70 #4, 70–100 #5, &gt;100 #6.</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2 class="h">Customization</h2>
+        <p class="muted small" id="custom-count"></p>
+        <button type="button" id="reset-all" class="btn danger">Restore all default doses &amp; concentrations</button>
+      </div>
+
+      <div class="card">
+        <h2 class="h">About</h2>
+        <p class="small muted">Patient data is never stored or transmitted. Entries clear when the page is closed or reloaded, or when you tap New patient. Only your dose/concentration edits and display preferences are saved, in this browser.</p>
+        <p class="small muted" id="offline-status"></p>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button type="button" data-tab="adult" class="on" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-8 2.2-8 5v3h16v-3c0-2.8-3.6-5-8-5z"/></svg>
+      <span>Adult</span>
+    </button>
+    <button type="button" data-tab="peds">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 7a2.6 2.6 0 1 0 0-5.2A2.6 2.6 0 0 0 12 7zm-6 2.5v2h4.5V22h3V11.5H18v-2z"/></svg>
+      <span>Pediatrics</span>
+    </button>
+    <button type="button" data-tab="info">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
+      <span>Info</span>
+    </button>
+  </nav>
+
+  <!-- Medication editor -->
+  <dialog id="editor" aria-labelledby="ed-title"></dialog>
+
+  <!-- First-run disclaimer -->
+  <div id="gate" class="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gate-title">
+    <div class="gate-inner">
+      <img src="icons/icon-192.png" width="72" height="72" alt="" class="gate-icon">
+      <h2 id="gate-title">OR Dose</h2>
+      <div id="gate-text" class="disclaimer"></div>
+      <button type="button" id="gate-accept" class="btn primary big">I understand</button>
+    </div>
+  </div>
+
+  <script src="calc.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

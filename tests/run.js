@@ -1,0 +1,155 @@
+// Run with: node tests/run.js
+const { Fmt, makeMetrics, computeDose, Peds } = require('../calc.js');
+const Data = require('../data.js');
+
+let checks = 0, failures = 0;
+function check(cond, msg) { checks++; if (!cond) { failures++; console.log('FAIL: ' + msg); } }
+function near(a, b, msg, tol = 0.01) {
+  checks++;
+  if (a == null || Math.abs(a - b) > tol) { failures++; console.log(`FAIL: ${msg} — got ${a}, expected ${b}`); }
+}
+const med = (id, peds = false) => (peds ? Data.pediatric : Data.adult).find(m => m.id === (peds ? 'p_' + id : id));
+const clone = (m, over) => Object.assign({}, m, over);
+
+// Body metrics — 180 cm male, 100 kg
+{
+  const m = makeMetrics({ tbw: 100, heightCm: 180, sex: 'male', ageMonths: 480 });
+  near(m.idealFormulaKg, 50 + 2.3 * (180 / 2.54 - 60), 'Devine male');
+  near(m.ibw, 74.99, 'IBW');
+  near(m.abw, 74.99 + 0.4 * (100 - 74.99), 'AdjBW');
+  near(m.bmi, 30.86, 'BMI');
+  near(m.bsa, 2.236, 'BSA', 0.001);
+  near(m.lbw, 9270 * 100 / (6680 + 216 * 30.864), 'LBW male', 0.05);
+  near(m.adultEBV, 7000, 'EBV male');
+  check(!m.tbwBelowIdeal && m.ibwUnavailableReason === null, 'no flags');
+}
+{
+  const m = makeMetrics({ tbw: 60, heightCm: 165, sex: 'female' });
+  near(m.idealFormulaKg, 45.5 + 2.3 * (165 / 2.54 - 60), 'Devine female');
+  near(m.lbw, 9270 * 60 / (8780 + 244 * (60 / 1.65 / 1.65)), 'LBW female', 0.05);
+  near(m.adultEBV, 3900, 'EBV female');
+}
+{ // Underweight → IBW/AdjBW fall back to TBW
+  const m = makeMetrics({ tbw: 50, heightCm: 180, sex: 'male' });
+  near(m.ibw, 50, 'IBW capped'); near(m.abw, 50, 'AdjBW = TBW'); check(m.tbwBelowIdeal, 'below ideal flag');
+}
+{ // Missing inputs
+  const w = makeMetrics({ tbw: 70 });
+  check(w.ibw == null && w.abw == null && w.bmi == null && w.lbw == null, 'weight-only has no derived');
+  check(w.weight('tbw') === 70 && w.weight('ibw') == null, 'weight()');
+  check(w.ibwUnavailableReason === 'Enter height and sex for IBW / AdjBW', 'reason both');
+  check(makeMetrics({ tbw: 70, heightCm: 170 }).ibwUnavailableReason === 'Select sex for IBW / AdjBW', 'reason sex');
+  check(makeMetrics({ tbw: 70, sex: 'male' }).ibwUnavailableReason === 'Enter height for IBW / AdjBW', 'reason height');
+  const kid = makeMetrics({ tbw: 20, heightCm: 115, sex: 'male' });
+  check(kid.ibw == null && kid.ibwUnavailableReason.includes('140'), 'IBW blocked < 140 cm');
+}
+
+// Dose math
+{
+  let r = computeDose(med('propofol'), 80);
+  near(r.doseLow, 120, 'propofol low'); near(r.doseHigh, 200, 'propofol high');
+  near(r.volumeLow, 12, 'propofol vol low'); near(r.volumeHigh, 20, 'propofol vol high');
+
+  r = computeDose(med('fentanyl'), 70);
+  near(r.doseLow, 35, 'fent low'); near(r.doseHigh, 140, 'fent high');
+  near(r.volumeLow, 0.7, 'fent vol low'); near(r.volumeHigh, 2.8, 'fent vol high');
+
+  r = computeDose(med('neostigmine'), 100);
+  near(r.doseLow, 3, 'neo low'); near(r.doseHigh, 5, 'neo capped');
+  check(r.cappedHigh && !r.cappedLow, 'neo cap flags'); near(r.volumeHigh, 5, 'neo vol');
+
+  r = computeDose(med('bupivacaine'), 60);
+  near(r.doseHigh, 150, 'bupi 60 kg'); near(r.volumeHigh, 60, 'bupi vol');
+  r = computeDose(med('bupivacaine'), 100);
+  near(r.doseHigh, 175, 'bupi cap'); check(r.cappedHigh, 'bupi capped flag');
+
+  r = computeDose(clone(med('propofol_inf'), { low: 100, high: 100 }), 70);
+  near(r.doseLow, 7000, 'propofol inf mcg/min'); near(r.volumeLow, 42, 'propofol inf mL/hr');
+  near(computeDose(clone(med('norepi_inf'), { low: 0.1, high: 0.1 }), 80).volumeLow, 30, 'norepi rate');
+  near(computeDose(clone(med('dex_inf'), { low: 0.5, high: 0.5 }), 80).volumeLow, 10, 'dex rate');
+
+  r = computeDose(clone(med('propofol'), { concentration: 20 }), 80);
+  near(r.doseLow, 120, 'dose unchanged'); near(r.volumeLow, 6, 'volume halves at 20 mg/mL');
+
+  r = computeDose(med('atropine', true), 5);
+  near(r.doseLow, 0.1, 'atropine floor'); check(r.flooredLow, 'floor flag'); near(r.doseHigh, 0.1, 'atropine 0.02×5');
+  r = computeDose(med('atropine', true), 40);
+  near(r.doseHigh, 0.5, 'atropine cap'); check(r.cappedHigh, 'cap flag');
+
+  r = computeDose(med('dantrolene'), 70);
+  near(r.doseLow, 175, 'dantrolene mg'); near(r.volumeLow, 525, 'dantrolene mL', 0.1);
+
+  near(computeDose(med('lipid'), 60).volumeLow, 90, 'lipid mL');
+  near(computeDose(med('lipid'), 70).volumeLow, 100, 'lipid capped 100 mL');
+
+  for (const m of Data.adult.concat(Data.pediatric)) {
+    check(m.low > 0 && m.high >= m.low, m.id + ' range ordered');
+    check(m.concentration > 0, m.id + ' conc > 0');
+    check(m.presets.some(p => Math.abs(p - m.concentration) < 1e-9), m.id + ' default conc in presets');
+    check(require('../calc.js').unitFactor(m.concUnit, m.doseUnit) != null, m.id + ' units compatible');
+    check(Data.CATEGORIES.some(c => c.id === m.category), m.id + ' category known');
+    check(['tbw', 'ibw', 'abw'].includes(m.basis), m.id + ' basis valid');
+  }
+  const ids = Data.adult.map(m => m.id), pids = Data.pediatric.map(m => m.id);
+  check(new Set(ids).size === ids.length, 'adult ids unique');
+  check(new Set(pids).size === pids.length && pids.every(i => i.startsWith('p_')), 'peds ids unique + prefixed');
+}
+
+// Formatting
+{
+  check(Fmt.number(120) === '120', 'fmt 120');
+  check(Fmt.number(1234.5) === '1,235', 'fmt grouping: ' + Fmt.number(1234.5));
+  check(Fmt.number(87.5) === '87.5', 'fmt 87.5');
+  check(Fmt.number(2.345) === '2.35', 'fmt 2.35: ' + Fmt.number(2.345));
+  check(Fmt.number(0.35) === '0.35', 'fmt 0.35');
+  check(Fmt.number(0.0125) === '0.013', 'fmt 0.013: ' + Fmt.number(0.0125));
+  check(Fmt.number(0) === '0', 'fmt 0');
+  check(Fmt.range(12, 12) === '12', 'single range');
+  check(Fmt.range(12, 20) === '12–20', 'range');
+  check(Fmt.amount(1750, 10500, 'mcg') === '1.75–10.5 mg', 'mcg→mg: ' + Fmt.amount(1750, 10500, 'mcg'));
+  check(Fmt.amount(35, 140, 'mcg') === '35–140 mcg', 'mcg stays');
+  check(Fmt.concentration(5, 'mg', true) === '0.5% · 5 mg/mL', 'percent label');
+  check(Fmt.perKg(med('propofol')) === '1.5–2.5 mg/kg', 'perKg');
+  check(Fmt.perKg(med('norepi_inf')) === '0.01–0.3 mcg/kg/min', 'perKg infusion: ' + Fmt.perKg(med('norepi_inf')));
+  check(Fmt.perKg(med('bupivacaine')) === 'Max 2.5 mg/kg', 'perKg max');
+}
+
+// Pediatrics
+{
+  near(Peds.estimatedWeightKg(0.5), 3.5, 'neonate wt'); near(Peds.estimatedWeightKg(6), 7, '6 mo wt');
+  near(Peds.estimatedWeightKg(60), 18, '5 y wt'); near(Peds.estimatedWeightKg(144), 36, '12 y wt');
+
+  let e = Peds.ett(60, 18);
+  near(e.cuffed, 4.5, 'cuffed 5y'); near(e.uncuffed, 5.0, 'uncuffed 5y'); near(e.depthOralCm, 14.5, 'depth 5y');
+  e = Peds.ett(96, 26);
+  near(e.cuffed, 5.5, 'cuffed 8y'); near(e.uncuffed, 6.0, 'uncuffed 8y'); near(e.depthOralCm, 16, 'depth 8y');
+  e = Peds.ett(24, 12);
+  near(e.cuffed, 4.0, 'cuffed 2y'); near(e.uncuffed, 4.5, 'uncuffed 2y'); near(e.depthOralCm, 13, 'depth 2y');
+  e = Peds.ett(0.3, 3.5);
+  near(e.cuffed, 3.0, 'neonate cuffed'); near(e.uncuffed, 3.5, 'neonate uncuffed'); near(e.depthOralCm, 9.5, 'neonate depth');
+  e = Peds.ett(0.1, 1.5);
+  check(e.cuffed == null, 'no cuffed in preterm'); near(e.uncuffed, 3.0, '1.5 kg uncuffed');
+  near(Peds.ett(0.1, 0.8).uncuffed, 2.5, '0.8 kg uncuffed');
+  e = Peds.ett(9, 9);
+  near(e.cuffed, 3.5, '9mo cuffed'); near(e.depthOralCm, 12, '9mo depth');
+  near(Peds.ett(216, 70).cuffed, 8.0, 'ETT cap');
+  near(Peds.roundToHalfDown(4.0), 4.0, 'round exact'); near(Peds.roundToHalfDown(4.3), 4.5, 'round 4.3');
+  near(Peds.roundToHalfDown(4.2), 4.0, 'round 4.2');
+
+  check(Peds.lma(4).size === '1' && Peds.lma(5).size === '1.5', 'lma boundaries');
+  check(Peds.lma(18).size === '2' && Peds.lma(20).size === '2.5', 'lma 2/2.5');
+  check(Peds.lma(65).size === '4' && Peds.lma(120).size === '6', 'lma large');
+  check(Peds.lma(18).maxCuffML === 10, 'lma cuff vol');
+
+  near(Peds.maintenanceMLPerHr(8), 32, '4-2-1 8kg'); near(Peds.maintenanceMLPerHr(15), 50, '4-2-1 15kg');
+  near(Peds.maintenanceMLPerHr(30), 70, '4-2-1 30kg');
+  near(Peds.ebvPerKg(0.3), 85, 'EBV neonate'); near(Peds.ebvPerKg(60), 75, 'EBV child');
+  near(Peds.maxAllowableBloodLoss(1500, 36, 24), 600, 'MABL');
+  check(Peds.maxAllowableBloodLoss(1500, 24, 30) == null, 'MABL invalid');
+
+  near(Peds.vitals(60).lowSBP, 80, 'SBP 5y'); check(Peds.vitals(3).group === 'Infant', 'vitals infant');
+  check(Peds.laryngoscopeBlade(60) === 'Miller 2 / Mac 2', 'blade 5y');
+}
+
+console.log(`${checks - failures}/${checks} checks passed`);
+process.exit(failures ? 1 : 0);
