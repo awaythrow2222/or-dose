@@ -181,7 +181,7 @@ body[data-tab="peds"] #sex-row { display: none; }
 .vrow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 5px 0; }
 .vrow .lab { font-size: 15px; }
 .vrow .det { font-size: 12.5px; color: var(--muted); }
-.vrow .val { font: 650 17px/1.2 ui-rounded, -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; text-align: right; }
+.vrow .val { font: 650 17px/1.2 ui-rounded, -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; flex: none; }
 .vrow .val.em { font-size: 21px; font-weight: 700; color: var(--accent); }
 .card hr.sep { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
 .card .sub { font-size: 12px; color: var(--muted); margin: -6px 0 8px; }
@@ -255,3 +255,24 @@ dialog#editor::backdrop { background: rgba(0, 0, 0, .45); }
 .gate-icon { border-radius: 16px; }
 .gate .disclaimer { align-self: stretch; }
 .gate .disclaimer p { font-size: 16px; }
+
+/* Adult calcs */
+#calcs-body { display: flex; flex-direction: column; gap: 14px; }
+.slider-wrap { margin: 6px 0 2px; }
+.slider-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.slider-head .lab { font-size: 15px; }
+.slider-head .val { font: 700 24px/1 ui-rounded, -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; color: var(--accent); }
+.slider-head .val small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+input[type="range"].thr { width: 100%; height: 44px; margin: 4px 0 0; accent-color: var(--accent); background: transparent; }
+.ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); padding: 0 4px; margin-top: -8px; font-variant-numeric: tabular-nums; }
+.link-btn { border: 0; background: transparent; color: var(--accent); font-size: 14px; font-weight: 600; min-height: 36px; padding: 0 4px; cursor: pointer; }
+.link-btn[hidden] { display: none; }
+.inline-field { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+.inline-field label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+.inline-field input { width: 100%; height: 44px; border: 1.5px solid transparent; border-radius: 8px; padding: 0 10px; background: var(--fill); color: var(--text); font: 650 19px ui-rounded, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.inline-field input:focus { outline: none; border-color: var(--accent); }
+.inline-field.one { grid-template-columns: 1fr; }
+.msg { font-size: 14px; color: var(--muted); padding: 6px 0; }
+.msg.warn { color: var(--warn); }
+.mrow.plain .dose, .mrow.plain .vol { font-weight: 650; }
+.mrow.plain .vol { color: var(--text); }

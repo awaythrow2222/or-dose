@@ -128,6 +128,43 @@
     };
   }
 
+  // ───────────────────────── Fluids & blood loss (shared by adult and pediatric) ─────────────────────────
+
+  /** 4-2-1 rule, mL/hr. */
+  function maintenanceMLPerHr(w) {
+    if (w <= 10) return 4 * w;
+    if (w <= 20) return 40 + 2 * (w - 10);
+    return 60 + (w - 20);
+  }
+
+  /** Maximum allowable blood loss, mL: EBV × (start − threshold) / mean(start, threshold). Works for Hgb or Hct. */
+  function maxAllowableBloodLoss(ebv, start, threshold) {
+    if (!(ebv > 0) || !(start > 0) || !(threshold > 0) || !(start > threshold)) return null;
+    return ebv * (start - threshold) / ((start + threshold) / 2);
+  }
+
+  // ───────────────────────── Adult ventilation / airway ─────────────────────────
+
+  const Adult = {
+    /** ARDSNet predicted body weight (Devine, uncapped) — the weight tidal volumes are based on. */
+    pbw(heightCm, sex) {
+      if (heightCm == null || !sex || heightCm < 120) return null;
+      return (sex === 'male' ? 50 : 45.5) + 0.91 * (heightCm - 152.4);
+    },
+    tidalVolumeML(pbw, mlPerKg) { return pbw * mlPerKg; },
+
+    /** Oral ETT depth estimates in cm: the 21 (F) / 23 (M) rule, and the Chula height formula (0.1 × height + 4). */
+    ettDepth(heightCm, sex) {
+      return {
+        ruleCm: sex ? (sex === 'male' ? 23 : 21) : null,
+        chulaCm: heightCm != null && heightCm >= 120 ? heightCm / 10 + 4 : null,
+      };
+    },
+
+    /** Estimated blood volume per kg of actual weight, by sex. */
+    ebvPerKg(sex) { return sex ? (sex === 'male' ? 70 : 65) : null; },
+  };
+
   // ───────────────────────── Pediatric estimates ─────────────────────────
   // Population rules of thumb for choosing a starting size; always have adjacent sizes available.
 
@@ -230,12 +267,7 @@
     /** Suction catheter ≈ twice the ETT internal diameter, in French. */
     suctionFr(ettSize) { return ettSize * 2; },
 
-    /** 4-2-1 rule, mL/hr. */
-    maintenanceMLPerHr(w) {
-      if (w <= 10) return 4 * w;
-      if (w <= 20) return 40 + 2 * (w - 10);
-      return 60 + (w - 20);
-    },
+    maintenanceMLPerHr,
 
     /** Estimated blood volume, mL/kg, by age. */
     ebvPerKg(m) {
@@ -245,10 +277,7 @@
       return 70;
     },
 
-    maxAllowableBloodLoss(ebv, startHct, minHct) {
-      if (!(startHct > 0) || !(minHct > 0) || !(startHct > minHct)) return null;
-      return ebv * (startHct - minHct) / ((startHct + minHct) / 2);
-    },
+    maxAllowableBloodLoss,
 
     /** Awake normal ranges (PALS) and the systolic hypotension threshold. */
     vitals(m) {
@@ -262,7 +291,7 @@
     },
   };
 
-  const api = { Fmt, makeMetrics, computeDose, concInDoseUnits, unitFactor, Peds };
+  const api = { Fmt, makeMetrics, computeDose, concInDoseUnits, unitFactor, maintenanceMLPerHr, maxAllowableBloodLoss, Adult, Peds };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ORCalc = api;
 })(typeof self !== 'undefined' ? self : this);

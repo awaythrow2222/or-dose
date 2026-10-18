@@ -1,7 +1,7 @@
 /* OR Dose — UI. Depends on calc.js (ORCalc) and data.js (ORData). */
 (function () {
   'use strict';
-  const { Fmt, makeMetrics, computeDose, Peds } = ORCalc;
+  const { Fmt, makeMetrics, computeDose, maintenanceMLPerHr, maxAllowableBloodLoss, Adult, Peds } = ORCalc;
   const Data = ORData;
 
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -148,7 +148,7 @@
   $('#new-patient').addEventListener('click', () => {
     if (!confirm('Clear all patient data and start a new patient?')) return;
     Object.assign(P, { age: '', ageUnit: 'years', weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm', sex: null, weightIsEstimate: false });
-    hct.start = ''; hct.min = '';
+    hct.start = ''; hct.min = ''; resetCalc();
     syncInputs(); update();
     window.scrollTo(0, 0);
   });
@@ -169,8 +169,8 @@
     if (!m || tab === 'info') { box.hidden = true; box.innerHTML = ''; return; }
     const item = (l, v) => `<div class="it"><small>${l}</small><b class="${v == null ? 'na' : ''}">${v == null ? '—' : Fmt.fixed(v, 1) + ' kg'}</b></div>`;
     let html = item('TBW', m.tbw);
-    if (tab === 'adult') html += item('IBW', m.ibw) + item('AdjBW', m.abw);
-    if (tab === 'adult' && m.bmi != null) html += `<div class="it"><small>BMI</small><b>${Fmt.fixed(m.bmi, 1)}</b></div>`;
+    if (tab !== 'peds') html += item('IBW', m.ibw) + item('AdjBW', m.abw);
+    if (tab !== 'peds' && m.bmi != null) html += `<div class="it"><small>BMI</small><b>${Fmt.fixed(m.bmi, 1)}</b></div>`;
     if (P.weightIsEstimate) html += '<div class="est">⚠ Estimated</div>';
     box.innerHTML = html; box.hidden = false;
   }
@@ -178,7 +178,7 @@
   function renderWarnings(tab) {
     const msgs = fieldWarnings().map(t => banner(esc(t)));
     const am = ageMonths();
-    if (tab === 'adult' && am != null && am < 18 * 12) {
+    if ((tab === 'adult' || tab === 'calcs') && am != null && am < 18 * 12) {
       msgs.push(banner("Patient is under 18. Adult ideal-weight formulas aren't valid for children — use the Pediatrics tab for weight-based dosing and equipment sizes."));
     }
     $('#warnings').innerHTML = msgs.join('');
@@ -392,9 +392,7 @@
       tile('Adjusted (AdjBW)', m.abw == null ? null : Fmt.fixed(m.abw, 1), 'kg', 'IBW + 0.4 × (TBW − IBW)') +
       tile('Lean (LBW)', m.lbw == null ? null : Fmt.fixed(m.lbw, 1), 'kg', 'Janmahasatian') +
       tile('BMI', m.bmi == null ? null : Fmt.fixed(m.bmi, 1), 'kg/m²', m.bmi == null ? '' : bmiCategory(m.bmi)) +
-      tile('BSA', m.bsa == null ? null : Fmt.fixed(m.bsa, 2), 'm²', 'Mosteller') +
-      tile('Est. blood volume', m.adultEBV == null ? null : Fmt.number(m.adultEBV), 'mL', m.sex === 'male' ? '70 mL/kg' : '65 mL/kg') +
-      tile('Maintenance fluid', Fmt.fixed(Peds.maintenanceMLPerHr(m.tbw), 0), 'mL/hr', '4-2-1 rule');
+      tile('BSA', m.bsa == null ? null : Fmt.fixed(m.bsa, 2), 'm²', 'Mosteller');
     let notes = '';
     if (m.ibwUnavailableReason) notes += `<div class="note-line">ⓘ ${esc(m.ibwUnavailableReason)}</div>`;
     if (m.tbwBelowIdeal) notes += '<div class="note-line">ⓘ Weight is at or below ideal — IBW and AdjBW are set equal to TBW.</div>';
@@ -407,6 +405,112 @@
   const metricsCard = $('#metrics-card');
   metricsCard.open = !!prefs.metricsExpanded;
   metricsCard.addEventListener('toggle', () => { prefs.metricsExpanded = metricsCard.open; savePrefs(); $('#metrics-summary').hidden = metricsCard.open; });
+
+  // ───────────────────────── Adult calcs tab ─────────────────────────
+
+  const DEFAULT_THRESHOLD = 7;
+  const calc = { hgb: '', thresh: DEFAULT_THRESHOLD, ebvPerKg: '', npo: '' };
+  const resetCalc = () => Object.assign(calc, { hgb: '', thresh: DEFAULT_THRESHOLD, ebvPerKg: '', npo: '' });
+  const TV_ROWS = [6, 7, 8, 10];
+
+  function ventHTML(m) {
+    const pbw = Adult.pbw(m.heightCm, m.sex);
+    if (pbw == null) {
+      const why = m.heightCm != null && m.heightCm < 120 ? 'Height under 120 cm — predicted body weight formula not valid.'
+        : m.heightCm == null && !m.sex ? 'Enter height and select sex to calculate tidal volumes.'
+        : m.heightCm == null ? 'Enter height to calculate tidal volumes.' : 'Select sex to calculate tidal volumes.';
+      return card('Tidal volume', 'Based on predicted body weight', `<div class="msg">${esc(why)}</div>`);
+    }
+    return card('Tidal volume', 'Based on predicted body weight (PBW)',
+      vrow('Predicted body weight', Fmt.fixed(pbw, 1) + ' kg', m.sex === 'male' ? '50 + 0.91 × (height cm − 152.4)' : '45.5 + 0.91 × (height cm − 152.4)', true) +
+      '<hr class="sep">' +
+      TV_ROWS.map(k => vrow(k + ' mL/kg', Fmt.number(Adult.tidalVolumeML(pbw, k)) + ' mL', k === 10 ? 'Upper end of the usual range' : '')).join('') +
+      '<div class="fine">Tidal volume is based on height and sex, not actual weight. Lung-protective ventilation typically uses 6–8 mL/kg PBW. Adjust to the patient, surgery and plateau pressure.</div>');
+  }
+
+  function ettDepthHTML(m) {
+    const d = Adult.ettDepth(m.heightCm, m.sex);
+    if (d.ruleCm == null && d.chulaCm == null) {
+      return card('Endotracheal tube depth', 'Oral, at the teeth/lips', '<div class="msg">Enter height and select sex to estimate tube depth.</div>');
+    }
+    return card('Endotracheal tube depth', 'Oral, at the teeth/lips',
+      (d.chulaCm != null ? vrow('Height-based estimate', Fmt.fixed(d.chulaCm, 1) + ' cm', '0.1 × height (cm) + 4 (Chula formula)', true) : vrow('Height-based estimate', '—', 'Enter height')) +
+      (d.ruleCm != null ? vrow('Rule of thumb', d.ruleCm + ' cm', m.sex === 'male' ? '23 cm for men' : '21 cm for women') : vrow('Rule of thumb', '—', 'Select sex')) +
+      '<div class="fine">Nasal: add about 2–3 cm. These are estimates and the reference landmark differs between sources. Confirm placement clinically (auscultation, capnography, imaging as indicated).</div>');
+  }
+
+  function maintRowsHTML(m) {
+    const hours = parse(calc.npo);
+    const hasHours = hours != null && hours > 0 && hours <= 48;
+    return ['tbw', 'ibw', 'abw'].map(b => {
+      const w = m.weight(b);
+      const lead = `<div class="basis"><b>${BASIS_LABEL[b]}</b><span>${w == null ? '—' : Fmt.fixed(w, 1) + ' kg'}</span></div>`;
+      if (w == null) return `<div class="mrow plain">${lead}<div class="na">${esc(m.ibwUnavailableReason || 'Unavailable')}</div></div>`;
+      const rate = maintenanceMLPerHr(w);
+      return `<div class="mrow plain">${lead}<div class="dose">${Fmt.fixed(rate, 1)} mL/hr<br><span class="muted small">${Fmt.number(rate * 24)} mL/day</span></div>` +
+        `<div class="vol">${hasHours ? Fmt.number(rate * hours) + ' mL' : '—'}</div></div>`;
+    }).join('');
+  }
+
+  function fluidsHTML(m) {
+    return card('Maintenance fluids', '4-2-1 rule',
+      `<div class="inline-field one"><div><label for="npo-hours">Hours NPO (optional, for deficit)</label><input id="npo-hours" type="text" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(calc.npo)}"></div></div>` +
+      '<div class="cols"><span>Basis</span><span>Maintenance</span><span>NPO deficit</span></div>' +
+      `<div id="maint-rows">${maintRowsHTML(m)}</div>` +
+      '<div class="fine">4 mL/kg/hr for the first 10 kg, 2 mL/kg/hr for the next 10 kg, 1 mL/kg/hr thereafter. Consider ideal or adjusted weight when actual weight is well above ideal. The NPO deficit is maintenance rate × hours NPO; replacement strategy and goals vary.</div>');
+  }
+
+  /** Output of the blood-loss calculator; redrawn on its own so the inputs keep focus while typing. */
+  function mablAdultHTML(m) {
+    const typed = parse(calc.ebvPerKg);
+    const perKg = goodNum(typed) ? typed : Adult.ebvPerKg(m.sex);
+    const hgbText = calc.hgb.trim(), hgb = parse(calc.hgb);
+    if (perKg == null) return '<div class="msg warn">Select sex above, or enter an estimated blood volume in mL/kg.</div>';
+    if (calc.ebvPerKg.trim() && !goodNum(typed)) return '<div class="msg warn">Enter blood volume as a number of mL/kg greater than zero.</div>';
+    if (!hgbText) return '<div class="msg">Enter a starting hemoglobin to calculate.</div>';
+    if (hgb == null || hgb < 3 || hgb > 25) return '<div class="msg warn">Hemoglobin looks out of range (3–25 g/dL).</div>';
+    const thr = calc.thresh;
+    if (hgb <= thr) return `<div class="msg warn">Starting Hgb (${Fmt.fixed(hgb, 1)} g/dL) is at or below the ${Fmt.fixed(thr, 1)} g/dL transfusion threshold, so there is no allowable blood loss.</div>`;
+    const ebv = m.tbw * perKg, loss = maxAllowableBloodLoss(ebv, hgb, thr);
+    return vrow('Estimated blood volume', Fmt.number(ebv) + ' mL', `${Fmt.fixed(m.tbw, 1)} kg × ${Fmt.number(perKg)} mL/kg`) +
+      vrow('Max allowable blood loss', Fmt.number(loss) + ' mL', `Until Hgb falls from ${Fmt.fixed(hgb, 1)} to ${Fmt.fixed(thr, 1)} g/dL`, true) +
+      vrow('Share of blood volume', Fmt.fixed(loss / ebv * 100, 0) + '%');
+  }
+
+  function bloodHTML(m) {
+    const def = Adult.ebvPerKg(m.sex);
+    const obese = m.bmi != null && m.bmi >= 30;
+    return card('Maximum allowable blood loss', 'Hemoglobin-based',
+      `<div class="inline-field"><div><label for="calc-hgb">Starting Hgb (g/dL)</label><input id="calc-hgb" type="text" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(calc.hgb)}"></div>` +
+      `<div><label for="calc-ebv">Blood volume (mL/kg)</label><input id="calc-ebv" type="text" inputmode="decimal" autocomplete="off" placeholder="${def == null ? '—' : def}" value="${esc(calc.ebvPerKg)}"></div></div>` +
+      `<div class="slider-wrap"><div class="slider-head"><span class="lab">Transfusion threshold</span><span class="val" id="thr-val">${Fmt.fixed(calc.thresh, 1)}<small>g/dL</small></span></div>` +
+      `<input class="thr" id="calc-thr" type="range" min="5" max="10" step="0.5" value="${calc.thresh}" aria-label="Transfusion threshold hemoglobin, g/dL">` +
+      '<div class="ticks" aria-hidden="true"><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>' +
+      `<button type="button" class="link-btn" id="thr-reset"${calc.thresh === DEFAULT_THRESHOLD ? ' hidden' : ''}>Reset to ${DEFAULT_THRESHOLD}</button></div>` +
+      '<hr class="sep">' +
+      `<div id="mabl-adult">${mablAdultHTML(m)}</div>` +
+      '<div class="fine">MABL = EBV × (starting Hgb − threshold) ÷ average of the two. Assumes blood loss is replaced to keep the volume constant. Blood volume uses actual weight at 70 mL/kg (male) or 65 mL/kg (female) unless you enter a value' +
+      (obese ? '; it is lower per kg in obesity, so consider entering a smaller mL/kg' : '') + '.</div>');
+  }
+
+  function renderCalcs(m) {
+    const box = $('#calcs-body');
+    if (!m) { box.innerHTML = emptyPrompt('Enter a weight', 'Ventilation, airway, fluid and blood-loss values are calculated from the patient entry above.'); return; }
+    box.innerHTML = ventHTML(m) + ettDepthHTML(m) + fluidsHTML(m) + bloodHTML(m);
+
+    const redrawMabl = () => { $('#mabl-adult').innerHTML = mablAdultHTML(m); };
+    $('#npo-hours').addEventListener('input', e => { calc.npo = e.target.value; $('#maint-rows').innerHTML = maintRowsHTML(m); });
+    $('#calc-hgb').addEventListener('input', e => { calc.hgb = e.target.value; redrawMabl(); });
+    $('#calc-ebv').addEventListener('input', e => { calc.ebvPerKg = e.target.value; redrawMabl(); });
+    const slider = $('#calc-thr'), reset = $('#thr-reset');
+    const syncThreshold = () => {
+      $('#thr-val').innerHTML = Fmt.fixed(calc.thresh, 1) + '<small>g/dL</small>';
+      reset.hidden = calc.thresh === DEFAULT_THRESHOLD;
+      redrawMabl();
+    };
+    slider.addEventListener('input', () => { calc.thresh = Number(slider.value); syncThreshold(); });
+    reset.addEventListener('click', () => { calc.thresh = DEFAULT_THRESHOLD; slider.value = DEFAULT_THRESHOLD; syncThreshold(); });
+  }
 
   // ───────────────────────── Pediatrics tab ─────────────────────────
 
@@ -588,13 +692,13 @@
   // ───────────────────────── Tabs & main update ─────────────────────────
 
   let tab = 'adult';
-  const TITLES = { adult: 'Adult', peds: 'Pediatrics', info: 'Info' };
+  const TITLES = { adult: 'Adult', calcs: 'Adult Calcs', peds: 'Pediatrics', info: 'Info' };
 
   function setTab(next) {
     tab = next;
     document.body.dataset.tab = tab;
     $('#page-title').textContent = TITLES[tab];
-    ['adult', 'peds', 'info'].forEach(t => { $('#tab-' + t).hidden = t !== tab; });
+    ['adult', 'calcs', 'peds', 'info'].forEach(t => { $('#tab-' + t).hidden = t !== tab; });
     $$('.tabbar button').forEach(b => { const on = b.dataset.tab === tab; b.classList.toggle('on', on); if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     window.scrollTo(0, 0);
     update();
@@ -612,6 +716,7 @@
     renderSummary(m, tab);
     renderWarnings(tab);
     if (tab === 'adult') renderAdult(m);
+    else if (tab === 'calcs') renderCalcs(m);
     else if (tab === 'peds') renderPeds(m);
     else refreshInfo();
   }

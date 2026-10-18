@@ -1,5 +1,5 @@
 // Run with: node tests/run.js
-const { Fmt, makeMetrics, computeDose, Peds } = require('../calc.js');
+const { Fmt, makeMetrics, computeDose, maintenanceMLPerHr, maxAllowableBloodLoss, Adult, Peds } = require('../calc.js');
 const Data = require('../data.js');
 
 let checks = 0, failures = 0;
@@ -149,6 +149,41 @@ const clone = (m, over) => Object.assign({}, m, over);
 
   near(Peds.vitals(60).lowSBP, 80, 'SBP 5y'); check(Peds.vitals(3).group === 'Infant', 'vitals infant');
   check(Peds.laryngoscopeBlade(60) === 'Miller 2 / Mac 2', 'blade 5y');
+}
+
+// Adult ventilation / airway / fluids / blood loss
+{
+  // ARDSNet: 6 ft (182.88 cm) male → ~77.6 kg PBW; 6 mL/kg ≈ 466 mL (matches the published worked example)
+  near(Adult.pbw(182.88, 'male'), 50 + 0.91 * (182.88 - 152.4), 'PBW male');
+  near(Adult.pbw(182.88, 'male'), 77.7, 'PBW male ≈ 77.7', 0.2);
+  near(Adult.pbw(165, 'female'), 45.5 + 0.91 * 12.6, 'PBW female');
+  near(Adult.tidalVolumeML(Adult.pbw(182.88, 'male'), 6), 466, 'TV 6 mL/kg', 2);
+  check(Adult.pbw(null, 'male') === null && Adult.pbw(175, null) === null, 'PBW needs height and sex');
+  check(Adult.pbw(110, 'male') === null, 'PBW rejects very short heights');
+  // Same equation as uncapped Devine with rounded constants (0.91 kg/cm vs 2.3 kg/in = 0.9055 kg/cm): within ~0.15 kg.
+  near(Adult.pbw(175, 'male'), makeMetrics({ tbw: 50, heightCm: 175, sex: 'male' }).idealFormulaKg, 'PBW ≈ uncapped Devine', 0.15);
+
+  let d = Adult.ettDepth(175, 'male');
+  check(d.ruleCm === 23, '23 cm rule male'); near(d.chulaCm, 21.5, 'Chula 175 cm');
+  d = Adult.ettDepth(160, 'female');
+  check(d.ruleCm === 21, '21 cm rule female'); near(d.chulaCm, 20, 'Chula 160 cm');
+  d = Adult.ettDepth(null, null);
+  check(d.ruleCm === null && d.chulaCm === null, 'ETT depth needs inputs');
+
+  near(Adult.ebvPerKg('male'), 70, 'EBV/kg male'); near(Adult.ebvPerKg('female'), 65, 'EBV/kg female');
+  check(Adult.ebvPerKg(null) === null, 'EBV/kg needs sex');
+
+  near(maintenanceMLPerHr(70), 110, '4-2-1 70 kg'); near(maintenanceMLPerHr(100), 140, '4-2-1 100 kg');
+  near(maintenanceMLPerHr(10), 40, '4-2-1 10 kg'); near(maintenanceMLPerHr(20), 60, '4-2-1 20 kg');
+
+  // MABL by Hgb: 70 kg male, EBV 4900, Hgb 13 → 7: 4900 × 6 / 10 = 2940
+  near(maxAllowableBloodLoss(4900, 13, 7), 2940, 'MABL Hgb 13→7');
+  // Raising the threshold to 8 shrinks it: 4900 × 5 / 10.5 = 2333
+  near(maxAllowableBloodLoss(4900, 13, 8), 2333.3, 'MABL Hgb 13→8', 0.1);
+  check(maxAllowableBloodLoss(4900, 7, 7) === null, 'MABL none when start == threshold');
+  check(maxAllowableBloodLoss(4900, 6, 7) === null, 'MABL none when start < threshold');
+  check(maxAllowableBloodLoss(0, 13, 7) === null && maxAllowableBloodLoss(4900, 0, 7) === null, 'MABL rejects zeros');
+  check(Peds.maxAllowableBloodLoss === maxAllowableBloodLoss, 'Peds shares MABL implementation');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

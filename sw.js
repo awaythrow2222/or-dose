@@ -1,6 +1,6 @@
 /* OR Dose service worker — caches the app shell so it works offline in the OR.
  * Bump CACHE whenever any file changes, so devices pick up the new version. */
-const CACHE = 'ordose-v3';
+const CACHE = 'ordose-v5';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'calc.js', 'data.js', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
