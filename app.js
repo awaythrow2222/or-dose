@@ -31,48 +31,69 @@
 
   // ───────────────────────── Medication customization ─────────────────────────
 
-  const allDefaults = Data.adult.concat(Data.pediatric);
+  const allDefaults = Data.adult.concat(Data.pediatric, Data.home);
   const defaultMed = id => allDefaults.find(m => m.id === id);
   const goodNum = v => typeof v === 'number' && isFinite(v) && v > 0;
 
   const Meds = {
     overrides: store.get('medicationOverrides.v1', {}),
+    /** Defaults with the user's edits applied. A home-screen drug (has baseId) takes its concentration from the base drug. */
     effective(m) {
       const o = this.overrides[m.id];
-      if (!o) return m;
       const out = Object.assign({}, m);
-      if (goodNum(o.concentration)) out.concentration = o.concentration;
-      if (goodNum(o.low)) out.low = o.low;
-      if (goodNum(o.high)) out.high = o.high;
-      if (BASIS_LABEL[o.basis]) out.basis = o.basis;
+      if (m.baseId) {
+        const bo = this.overrides[m.baseId];
+        if (bo && goodNum(bo.concentration)) out.concentration = bo.concentration;
+      } else if (o && goodNum(o.concentration)) out.concentration = o.concentration;
+      if (o) {
+        if (goodNum(o.low)) out.low = o.low;
+        if (goodNum(o.high)) out.high = o.high;
+        if (BASIS_LABEL[o.basis]) out.basis = o.basis;
+      }
       return out;
     },
     list(pediatric) { return (pediatric ? Data.pediatric : Data.adult).map(m => this.effective(m)); },
-    isCustomized(id) { return !!this.overrides[id]; },
+    home() { return Data.home.map(m => this.effective(m)); },
+    isCustomized(id) {
+      if (this.overrides[id]) return true;
+      const d = defaultMed(id);
+      return !!(d && d.baseId && this.overrides[d.baseId] && this.overrides[d.baseId].concentration);
+    },
     count() { return Object.keys(this.overrides).length; },
-    save(edited) {
-      const base = defaultMed(edited.id);
+    /** Stores only the fields that differ from the built-in default for `id`. */
+    setFields(id, fields) {
+      const base = defaultMed(id);
       if (!base) return;
-      const o = {};
-      if (edited.concentration !== base.concentration) o.concentration = edited.concentration;
-      if (edited.low !== base.low) o.low = edited.low;
-      if (edited.high !== base.high) o.high = edited.high;
-      if (edited.basis !== base.basis) o.basis = edited.basis;
-      if (Object.keys(o).length) this.overrides[edited.id] = o; else delete this.overrides[edited.id];
+      const cur = Object.assign({}, this.overrides[id]);
+      for (const k of Object.keys(fields)) { if (fields[k] !== base[k]) cur[k] = fields[k]; else delete cur[k]; }
+      if (Object.keys(cur).length) this.overrides[id] = cur; else delete this.overrides[id];
+    },
+    save(edited) {
+      if (!defaultMed(edited.id)) return;
+      const own = { low: edited.low, high: edited.high, basis: edited.basis };
+      if (edited.baseId) this.setFields(edited.baseId, { concentration: edited.concentration }); // shared with the Adult list
+      else own.concentration = edited.concentration;
+      this.setFields(edited.id, own);
       this.persist();
     },
-    reset(id) { delete this.overrides[id]; this.persist(); },
+    reset(id) {
+      delete this.overrides[id];
+      const d = defaultMed(id);
+      const bo = d && d.baseId && this.overrides[d.baseId];
+      if (bo) { delete bo.concentration; if (!Object.keys(bo).length) delete this.overrides[d.baseId]; }
+      this.persist();
+    },
     resetAll() { this.overrides = {}; this.persist(); },
     persist() { store.set('medicationOverrides.v1', this.overrides); },
   };
 
   // ───────────────────────── Patient state (memory only) ─────────────────────────
 
-  const P = { age: '', ageUnit: 'years', weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm', sex: null, weightIsEstimate: false };
+  const P = { age: '', ageUnit: 'years', weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm', hgb: '', npo: '', sex: null, weightIsEstimate: false };
   const MONTHS_PER = { years: 12, months: 1, days: 1 / 30.4375 };
   const KG_PER = { kg: 1, lb: 0.45359237 };
   const CM_PER = { cm: 1, inches: 2.54 };
-  const RANGE = { kg: [0.3, 500], cm: [25, 250], months: [0, 1440] };
+  const RANGE = { kg: [0.3, 500], cm: [25, 250], months: [0, 1440], hgb: [3, 25], npo: [0, 72] };
 
   function parse(text) {
     const c = String(text).trim().replace(',', '.');
@@ -84,6 +105,8 @@
   function ageMonths() { const v = parse(P.age); if (v == null) return null; const m = v * MONTHS_PER[P.ageUnit]; return within(m, RANGE.months) ? m : null; }
   function weightKg() { const v = parse(P.weight); if (v == null) return null; const k = v * KG_PER[P.weightUnit]; return within(k, RANGE.kg) ? k : null; }
   function heightCm() { const v = parse(P.height); if (v == null) return null; const c = v * CM_PER[P.heightUnit]; return within(c, RANGE.cm) ? c : null; }
+  function hgbValue() { const v = parse(P.hgb); return within(v, RANGE.hgb) ? v : null; }
+  function npoHours() { const v = parse(P.npo); return within(v, RANGE.npo) ? v : null; }
   function metrics() {
     const w = weightKg();
     return w == null ? null : makeMetrics({ tbw: w, heightCm: heightCm(), sex: P.sex, ageMonths: ageMonths() });
@@ -95,25 +118,29 @@
     if (P.weight.trim() && weightKg() == null) out.push('Weight looks out of range (0.3–500 kg) — doses are hidden until it is corrected.');
     if (P.height.trim() && heightCm() == null) out.push('Height looks out of range (25–250 cm) and is being ignored.');
     if (P.age.trim() && ageMonths() == null) out.push('Age looks out of range and is being ignored.');
+    if (P.hgb.trim() && hgbValue() == null) out.push('Hemoglobin looks out of range (3–25 g/dL) and is being ignored.');
+    if (P.npo.trim() && npoHours() == null) out.push('NPO time looks out of range (0–72 hours) and is being ignored.');
     return out;
   }
 
   // ───────────────────────── Entry card wiring ─────────────────────────
 
   const el = {
-    age: $('#in-age'), weight: $('#in-weight'), height: $('#in-height'),
+    age: $('#in-age'), weight: $('#in-weight'), height: $('#in-height'), hgb: $('#in-hgb'), npo: $('#in-npo'),
     segAge: $('#seg-age'), segWeight: $('#seg-weight'), segHeight: $('#seg-height'), segSex: $('#seg-sex'),
   };
 
   function setSeg(seg, value) { $$('button', seg).forEach(b => b.classList.toggle('on', b.dataset.v === value)); }
   function syncInputs() {
-    el.age.value = P.age; el.weight.value = P.weight; el.height.value = P.height;
+    el.age.value = P.age; el.weight.value = P.weight; el.height.value = P.height; el.hgb.value = P.hgb; el.npo.value = P.npo;
     setSeg(el.segAge, P.ageUnit); setSeg(el.segWeight, P.weightUnit); setSeg(el.segHeight, P.heightUnit); setSeg(el.segSex, P.sex);
   }
 
   el.age.addEventListener('input', () => { P.age = el.age.value; update(); });
   el.weight.addEventListener('input', () => { P.weight = el.weight.value; P.weightIsEstimate = false; update(); });
   el.height.addEventListener('input', () => { P.height = el.height.value; update(); });
+  el.hgb.addEventListener('input', () => { P.hgb = el.hgb.value; update(); });
+  el.npo.addEventListener('input', () => { P.npo = el.npo.value; update(); });
 
   // Switching a unit converts what is already typed.
   el.segAge.addEventListener('click', e => {
@@ -147,7 +174,7 @@
 
   $('#new-patient').addEventListener('click', () => {
     if (!confirm('Clear all patient data and start a new patient?')) return;
-    Object.assign(P, { age: '', ageUnit: 'years', weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm', sex: null, weightIsEstimate: false });
+    Object.assign(P, { age: '', ageUnit: 'years', weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm', hgb: '', npo: '', sex: null, weightIsEstimate: false });
     hct.start = ''; hct.min = ''; resetCalc();
     syncInputs(); update();
     window.scrollTo(0, 0);
@@ -178,8 +205,8 @@
   function renderWarnings(tab) {
     const msgs = fieldWarnings().map(t => banner(esc(t)));
     const am = ageMonths();
-    if ((tab === 'adult' || tab === 'calcs') && am != null && am < 18 * 12) {
-      msgs.push(banner("Patient is under 18. Adult ideal-weight formulas aren't valid for children — use the Pediatrics tab for weight-based dosing and equipment sizes."));
+    if ((tab === 'home' || tab === 'adult') && am != null && am < 18 * 12) {
+      msgs.push(banner("Patient is under 18. Adult ideal-weight and tidal-volume formulas aren't valid for children — use the Pediatrics tab for weight-based dosing and equipment sizes."));
     }
     $('#warnings').innerHTML = msgs.join('');
   }
@@ -406,29 +433,32 @@
   metricsCard.open = !!prefs.metricsExpanded;
   metricsCard.addEventListener('toggle', () => { prefs.metricsExpanded = metricsCard.open; savePrefs(); $('#metrics-summary').hidden = metricsCard.open; });
 
-  // ───────────────────────── Adult calcs tab ─────────────────────────
+  // ───────────────────────── Shared adult calculations ─────────────────────────
 
   const DEFAULT_THRESHOLD = 7;
-  const calc = { hgb: '', thresh: DEFAULT_THRESHOLD, ebvPerKg: '', npo: '' };
-  const resetCalc = () => Object.assign(calc, { hgb: '', thresh: DEFAULT_THRESHOLD, ebvPerKg: '', npo: '' });
-  const TV_ROWS = [6, 7, 8, 10];
+  const calc = { thresh: DEFAULT_THRESHOLD, ebvPerKg: '' };
+  const resetCalc = () => Object.assign(calc, { thresh: DEFAULT_THRESHOLD, ebvPerKg: '' });
 
-  function ventHTML(m) {
-    const pbw = Adult.pbw(m.heightCm, m.sex);
-    if (pbw == null) {
-      const why = m.heightCm != null && m.heightCm < 120 ? 'Height under 120 cm — predicted body weight formula not valid.'
-        : m.heightCm == null && !m.sex ? 'Enter height and select sex to calculate tidal volumes.'
-        : m.heightCm == null ? 'Enter height to calculate tidal volumes.' : 'Select sex to calculate tidal volumes.';
-      return card('Tidal volume', 'Based on predicted body weight', `<div class="msg">${esc(why)}</div>`);
-    }
-    return card('Tidal volume', 'Based on predicted body weight (PBW)',
-      vrow('Predicted body weight', Fmt.fixed(pbw, 1) + ' kg', m.sex === 'male' ? '50 + 0.91 × (height cm − 152.4)' : '45.5 + 0.91 × (height cm − 152.4)', true) +
-      '<hr class="sep">' +
-      TV_ROWS.map(k => vrow(k + ' mL/kg', Fmt.number(Adult.tidalVolumeML(pbw, k)) + ' mL', k === 10 ? 'Upper end of the usual range' : '')).join('') +
-      '<div class="fine">Tidal volume is based on height and sex, not actual weight. Lung-protective ventilation typically uses 6–8 mL/kg PBW. Adjust to the patient, surgery and plateau pressure.</div>');
+  function pbwReason(m) {
+    return m.heightCm != null && m.heightCm < 120 ? 'Height under 120 cm — predicted body weight formula not valid.'
+      : m.heightCm == null && !m.sex ? 'Enter height and select sex to calculate tidal volumes.'
+      : m.heightCm == null ? 'Enter height to calculate tidal volumes.' : 'Select sex to calculate tidal volumes.';
   }
 
-  function ettDepthHTML(m) {
+  /** Tidal volume card. opts.rows: mL/kg rows to list; opts.summary: lead with a low–high range. */
+  function ventHTML(m, opts) {
+    const pbw = Adult.pbw(m.heightCm, m.sex);
+    if (pbw == null) return card('Tidal volume', 'Based on predicted body weight', `<div class="msg">${esc(pbwReason(m))}</div>`);
+    const rows = opts.rows, lo = rows[0], hi = rows[rows.length - 1];
+    const lead = opts.summary
+      ? vrow(`${lo}–${hi} mL/kg`, `${Fmt.range(Adult.tidalVolumeML(pbw, lo), Adult.tidalVolumeML(pbw, hi))} mL`, `Predicted body weight ${Fmt.fixed(pbw, 1)} kg`, true) + '<hr class="sep">'
+      : vrow('Predicted body weight', Fmt.fixed(pbw, 1) + ' kg', m.sex === 'male' ? '50 + 0.91 × (height cm − 152.4)' : '45.5 + 0.91 × (height cm − 152.4)', true) + '<hr class="sep">';
+    return card('Tidal volume', 'Based on predicted body weight (PBW)',
+      lead + rows.map(k => vrow(k + ' mL/kg', Fmt.number(Adult.tidalVolumeML(pbw, k)) + ' mL', k === 10 ? 'Upper end of the usual range' : '')).join('') +
+      `<div class="fine">${opts.fine}</div>`);
+  }
+
+  function ettDepthHTML(m, brief) {
     const d = Adult.ettDepth(m.heightCm, m.sex);
     if (d.ruleCm == null && d.chulaCm == null) {
       return card('Endotracheal tube depth', 'Oral, at the teeth/lips', '<div class="msg">Enter height and select sex to estimate tube depth.</div>');
@@ -436,39 +466,26 @@
     return card('Endotracheal tube depth', 'Oral, at the teeth/lips',
       (d.chulaCm != null ? vrow('Height-based estimate', Fmt.fixed(d.chulaCm, 1) + ' cm', '0.1 × height (cm) + 4 (Chula formula)', true) : vrow('Height-based estimate', '—', 'Enter height')) +
       (d.ruleCm != null ? vrow('Rule of thumb', d.ruleCm + ' cm', m.sex === 'male' ? '23 cm for men' : '21 cm for women') : vrow('Rule of thumb', '—', 'Select sex')) +
-      '<div class="fine">Nasal: add about 2–3 cm. These are estimates and the reference landmark differs between sources. Confirm placement clinically (auscultation, capnography, imaging as indicated).</div>');
+      (brief ? '<div class="fine">Estimates only; nasal adds about 2–3 cm. Confirm placement clinically.</div>'
+        : '<div class="fine">Nasal: add about 2–3 cm. These are estimates and the reference landmark differs between sources. Confirm placement clinically (auscultation, capnography, imaging as indicated).</div>'));
   }
 
-  function maintRowsHTML(m) {
-    const hours = parse(calc.npo);
-    const hasHours = hours != null && hours > 0 && hours <= 48;
-    return ['tbw', 'ibw', 'abw'].map(b => {
-      const w = m.weight(b);
-      const lead = `<div class="basis"><b>${BASIS_LABEL[b]}</b><span>${w == null ? '—' : Fmt.fixed(w, 1) + ' kg'}</span></div>`;
-      if (w == null) return `<div class="mrow plain">${lead}<div class="na">${esc(m.ibwUnavailableReason || 'Unavailable')}</div></div>`;
-      const rate = maintenanceMLPerHr(w);
-      return `<div class="mrow plain">${lead}<div class="dose">${Fmt.fixed(rate, 1)} mL/hr<br><span class="muted small">${Fmt.number(rate * 24)} mL/day</span></div>` +
-        `<div class="vol">${hasHours ? Fmt.number(rate * hours) + ' mL' : '—'}</div></div>`;
-    }).join('');
+  function thresholdHTML() {
+    return `<div class="slider-wrap"><div class="slider-head"><span class="lab">Transfusion threshold</span><span class="val thr-val">${Fmt.fixed(calc.thresh, 1)}<small>g/dL</small></span></div>` +
+      `<input class="thr" type="range" min="5" max="10" step="0.5" value="${calc.thresh}" aria-label="Transfusion threshold hemoglobin, g/dL">` +
+      '<div class="ticks" aria-hidden="true"><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>' +
+      `<button type="button" class="link-btn thr-reset"${calc.thresh === DEFAULT_THRESHOLD ? ' hidden' : ''}>Reset to ${DEFAULT_THRESHOLD}</button></div>`;
   }
 
-  function fluidsHTML(m) {
-    return card('Maintenance fluids', '4-2-1 rule',
-      `<div class="inline-field one"><div><label for="npo-hours">Hours NPO (optional, for deficit)</label><input id="npo-hours" type="text" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(calc.npo)}"></div></div>` +
-      '<div class="cols"><span>Basis</span><span>Maintenance</span><span>NPO deficit</span></div>' +
-      `<div id="maint-rows">${maintRowsHTML(m)}</div>` +
-      '<div class="fine">4 mL/kg/hr for the first 10 kg, 2 mL/kg/hr for the next 10 kg, 1 mL/kg/hr thereafter. Consider ideal or adjusted weight when actual weight is well above ideal. The NPO deficit is maintenance rate × hours NPO; replacement strategy and goals vary.</div>');
-  }
-
-  /** Output of the blood-loss calculator; redrawn on its own so the inputs keep focus while typing. */
+  /** Output of the blood-loss calculator; redrawn on its own so inputs and the slider keep focus. */
   function mablAdultHTML(m) {
     const typed = parse(calc.ebvPerKg);
     const perKg = goodNum(typed) ? typed : Adult.ebvPerKg(m.sex);
-    const hgbText = calc.hgb.trim(), hgb = parse(calc.hgb);
+    const hgb = hgbValue();
     if (perKg == null) return '<div class="msg warn">Select sex above, or enter an estimated blood volume in mL/kg.</div>';
     if (calc.ebvPerKg.trim() && !goodNum(typed)) return '<div class="msg warn">Enter blood volume as a number of mL/kg greater than zero.</div>';
-    if (!hgbText) return '<div class="msg">Enter a starting hemoglobin to calculate.</div>';
-    if (hgb == null || hgb < 3 || hgb > 25) return '<div class="msg warn">Hemoglobin looks out of range (3–25 g/dL).</div>';
+    if (!P.hgb.trim()) return '<div class="msg">Enter a starting Hgb above to calculate.</div>';
+    if (hgb == null) return '<div class="msg warn">Hemoglobin looks out of range (3–25 g/dL).</div>';
     const thr = calc.thresh;
     if (hgb <= thr) return `<div class="msg warn">Starting Hgb (${Fmt.fixed(hgb, 1)} g/dL) is at or below the ${Fmt.fixed(thr, 1)} g/dL transfusion threshold, so there is no allowable blood loss.</div>`;
     const ebv = m.tbw * perKg, loss = maxAllowableBloodLoss(ebv, hgb, thr);
@@ -477,18 +494,46 @@
       vrow('Share of blood volume', Fmt.fixed(loss / ebv * 100, 0) + '%');
   }
 
+  /** Wires the threshold slider (and the blood-volume box, where present) inside `root`. */
+  function wireMabl(root, m) {
+    const out = $('.mabl-out', root), slider = $('.thr', root), reset = $('.thr-reset', root), val = $('.thr-val', root), ebvIn = $('.ebv-in', root);
+    const redraw = () => { out.innerHTML = mablAdultHTML(m); };
+    const sync = () => { val.innerHTML = Fmt.fixed(calc.thresh, 1) + '<small>g/dL</small>'; reset.hidden = calc.thresh === DEFAULT_THRESHOLD; redraw(); };
+    slider.addEventListener('input', () => { calc.thresh = Number(slider.value); sync(); });
+    reset.addEventListener('click', () => { calc.thresh = DEFAULT_THRESHOLD; slider.value = DEFAULT_THRESHOLD; sync(); });
+    if (ebvIn) ebvIn.addEventListener('input', () => { calc.ebvPerKg = ebvIn.value; redraw(); });
+  }
+
+  // ───────────────────────── Adult → Calcs ─────────────────────────
+
+  function maintRowsHTML(m) {
+    const hours = npoHours();
+    return ['tbw', 'ibw', 'abw'].map(b => {
+      const w = m.weight(b);
+      const lead = `<div class="basis"><b>${BASIS_LABEL[b]}</b><span>${w == null ? '—' : Fmt.fixed(w, 1) + ' kg'}</span></div>`;
+      if (w == null) return `<div class="mrow plain">${lead}<div class="na">${esc(m.ibwUnavailableReason || 'Unavailable')}</div></div>`;
+      const rate = maintenanceMLPerHr(w);
+      return `<div class="mrow plain">${lead}<div class="dose">${Fmt.fixed(rate, 1)} mL/hr<br><span class="muted small">${Fmt.number(rate * 24)} mL/day</span></div>` +
+        `<div class="vol">${hours != null ? Fmt.number(rate * hours) + ' mL' : '—'}</div></div>`;
+    }).join('');
+  }
+
+  function fluidsHTML(m) {
+    const hours = npoHours();
+    return card('Maintenance fluids', '4-2-1 rule',
+      `<div class="msg">${hours == null ? 'Enter NPO time above to see a deficit.' : `NPO ${Fmt.fixed(hours, 1)} h (from the entry above)`}</div>` +
+      '<div class="cols"><span>Basis</span><span>Maintenance</span><span>NPO deficit</span></div>' +
+      `<div>${maintRowsHTML(m)}</div>` +
+      '<div class="fine">4 mL/kg/hr for the first 10 kg, 2 mL/kg/hr for the next 10 kg, 1 mL/kg/hr thereafter. Consider ideal or adjusted weight when actual weight is well above ideal. The NPO deficit is maintenance rate × hours NPO; replacement strategy and goals vary.</div>');
+  }
+
   function bloodHTML(m) {
     const def = Adult.ebvPerKg(m.sex);
     const obese = m.bmi != null && m.bmi >= 30;
-    return card('Maximum allowable blood loss', 'Hemoglobin-based',
-      `<div class="inline-field"><div><label for="calc-hgb">Starting Hgb (g/dL)</label><input id="calc-hgb" type="text" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(calc.hgb)}"></div>` +
-      `<div><label for="calc-ebv">Blood volume (mL/kg)</label><input id="calc-ebv" type="text" inputmode="decimal" autocomplete="off" placeholder="${def == null ? '—' : def}" value="${esc(calc.ebvPerKg)}"></div></div>` +
-      `<div class="slider-wrap"><div class="slider-head"><span class="lab">Transfusion threshold</span><span class="val" id="thr-val">${Fmt.fixed(calc.thresh, 1)}<small>g/dL</small></span></div>` +
-      `<input class="thr" id="calc-thr" type="range" min="5" max="10" step="0.5" value="${calc.thresh}" aria-label="Transfusion threshold hemoglobin, g/dL">` +
-      '<div class="ticks" aria-hidden="true"><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>' +
-      `<button type="button" class="link-btn" id="thr-reset"${calc.thresh === DEFAULT_THRESHOLD ? ' hidden' : ''}>Reset to ${DEFAULT_THRESHOLD}</button></div>` +
-      '<hr class="sep">' +
-      `<div id="mabl-adult">${mablAdultHTML(m)}</div>` +
+    return card('Maximum allowable blood loss', 'Uses the starting Hgb entered above',
+      `<div class="inline-field one"><div><label for="calc-ebv">Blood volume (mL/kg)</label><input id="calc-ebv" class="ebv-in" type="text" inputmode="decimal" autocomplete="off" placeholder="${def == null ? '—' : def}" value="${esc(calc.ebvPerKg)}"></div></div>` +
+      thresholdHTML() + '<hr class="sep">' +
+      `<div class="mabl-out">${mablAdultHTML(m)}</div>` +
       '<div class="fine">MABL = EBV × (starting Hgb − threshold) ÷ average of the two. Assumes blood loss is replaced to keep the volume constant. Blood volume uses actual weight at 70 mL/kg (male) or 65 mL/kg (female) unless you enter a value' +
       (obese ? '; it is lower per kg in obesity, so consider entering a smaller mL/kg' : '') + '.</div>');
   }
@@ -496,21 +541,71 @@
   function renderCalcs(m) {
     const box = $('#calcs-body');
     if (!m) { box.innerHTML = emptyPrompt('Enter a weight', 'Ventilation, airway, fluid and blood-loss values are calculated from the patient entry above.'); return; }
-    box.innerHTML = ventHTML(m) + ettDepthHTML(m) + fluidsHTML(m) + bloodHTML(m);
-
-    const redrawMabl = () => { $('#mabl-adult').innerHTML = mablAdultHTML(m); };
-    $('#npo-hours').addEventListener('input', e => { calc.npo = e.target.value; $('#maint-rows').innerHTML = maintRowsHTML(m); });
-    $('#calc-hgb').addEventListener('input', e => { calc.hgb = e.target.value; redrawMabl(); });
-    $('#calc-ebv').addEventListener('input', e => { calc.ebvPerKg = e.target.value; redrawMabl(); });
-    const slider = $('#calc-thr'), reset = $('#thr-reset');
-    const syncThreshold = () => {
-      $('#thr-val').innerHTML = Fmt.fixed(calc.thresh, 1) + '<small>g/dL</small>';
-      reset.hidden = calc.thresh === DEFAULT_THRESHOLD;
-      redrawMabl();
-    };
-    slider.addEventListener('input', () => { calc.thresh = Number(slider.value); syncThreshold(); });
-    reset.addEventListener('click', () => { calc.thresh = DEFAULT_THRESHOLD; slider.value = DEFAULT_THRESHOLD; syncThreshold(); });
+    box.innerHTML =
+      ventHTML(m, { rows: [6, 7, 8, 10], fine: 'Tidal volume is based on height and sex, not actual weight. Lung-protective ventilation typically uses 6–8 mL/kg PBW. Adjust to the patient, surgery and plateau pressure.' }) +
+      ettDepthHTML(m) + fluidsHTML(m) + bloodHTML(m);
+    wireMabl(box, m);
   }
+
+  // ───────────────────────── Home screen ─────────────────────────
+
+  const homeBody = $('#home-body');
+
+  /** Children get the age-based pediatric depth; everyone else the adult height-based estimates. */
+  function homeAirwayHTML(m) {
+    const am = ageMonths();
+    if (am == null || am >= 18 * 12) return ettDepthHTML(m, true);
+    const e = Peds.ett(am, m.tbw), f1 = x => Fmt.fixed(x, 1);
+    return card('Endotracheal tube depth', 'Pediatric estimate, oral at the lip',
+      vrow('Depth, oral', f1(e.depthOralCm) + ' cm', `${e.depthRule} · nasal ≈ ${f1(e.depthNasalCm)} cm`, true) +
+      (e.cuffed != null ? vrow('Cuffed tube (ID)', f1(e.cuffed) + ' mm') : '') +
+      (e.uncuffed != null ? vrow('Uncuffed tube (ID)', f1(e.uncuffed) + ' mm') : '') +
+      '<div class="fine">Age-based estimates; more sizes are on the Pediatrics tab. Confirm placement clinically.</div>');
+  }
+
+  function homeFluidsHTML(m) {
+    const rate = maintenanceMLPerHr(m.tbw), hours = npoHours(), n = Fmt.number;
+    let h = vrow('Maintenance rate', Fmt.fixed(rate, 1) + ' mL/hr', `4-2-1 on ${Fmt.fixed(m.tbw, 1)} kg TBW · ${n(rate * 24)} mL/day`, true);
+    h += hours == null
+      ? vrow('Estimated fluid deficit', '—', P.npo.trim() ? 'NPO time is out of range' : 'Enter NPO time above')
+      : vrow('Estimated fluid deficit', n(rate * hours) + ' mL', `${n(rate)} mL/hr × ${Fmt.fixed(hours, 1)} h NPO`, true);
+    if (m.ibw != null && m.abw != null) {
+      const alt = (label, w) => `${label} (${Fmt.fixed(w, 1)} kg): ${n(maintenanceMLPerHr(w))} mL/hr${hours != null ? `, deficit ${n(maintenanceMLPerHr(w) * hours)} mL` : ''}`;
+      h += `<div class="fine">${esc(alt('On IBW', m.ibw))}<br>${esc(alt('On AdjBW', m.abw))}</div>`;
+    }
+    return card('Fluids', 'Maintenance and NPO deficit',
+      h + '<div class="fine">Deficit = maintenance rate × hours NPO. Replacement strategy and goals vary.</div>');
+  }
+
+  function homeMedsHTML(m) {
+    const seg = `<div class="seg wide home-rows" role="group" aria-label="Rows"><button type="button" data-v="all"${prefs.showAllBases ? ' class="on"' : ''}>All weights</button><button type="button" data-v="sugg"${prefs.showAllBases ? '' : ' class="on"'}>Suggested only</button></div>`;
+    return `<div class="home-sec-title">Induction doses</div>${seg}` +
+      `<div class="cards">${Meds.home().map(med => medCardHTML(med, m, false, prefs.showAllBases)).join('')}</div>` +
+      '<p class="sub-note">Highlighted row = suggested weight basis. Tap a concentration to change it; concentrations are shared with the Adult medication list.</p>';
+  }
+
+  function homeBloodHTML(m) {
+    return card('Maximum allowable blood loss', 'Uses the starting Hgb entered above',
+      thresholdHTML() + '<hr class="sep">' + `<div class="mabl-out">${mablAdultHTML(m)}</div>` +
+      '<div class="fine">Blood volume is assumed 70 mL/kg (male) or 65 mL/kg (female) of actual weight; change it under Adult → Calcs.</div>');
+  }
+
+  function renderHome(m) {
+    $('#home-empty').hidden = !!m;
+    homeBody.hidden = !m;
+    if (!m) return;
+    homeBody.innerHTML = homeAirwayHTML(m) + homeFluidsHTML(m) +
+      ventHTML(m, { rows: [4, 5, 6], summary: true, fine: 'Based on predicted body weight from height and sex, not actual weight.' }) +
+      homeMedsHTML(m) + homeBloodHTML(m);
+    wireMabl(homeBody, m);
+  }
+
+  homeBody.addEventListener('click', e => {
+    const b = e.target.closest('.conc-btn');
+    if (b) { const med = Meds.home().find(x => x.id === b.dataset.id); if (med) openEditor(med, false); return; }
+    const r = e.target.closest('.home-rows button');
+    if (r) { prefs.showAllBases = r.dataset.v === 'all'; savePrefs(); update(); }
+  });
 
   // ───────────────────────── Pediatrics tab ─────────────────────────
 
@@ -691,14 +786,20 @@
 
   // ───────────────────────── Tabs & main update ─────────────────────────
 
-  let tab = 'adult';
-  const TITLES = { adult: 'Adult', calcs: 'Adult Calcs', peds: 'Pediatrics', info: 'Info' };
+  let tab = 'home';
+  let adultSection = 'meds';
+  const TITLES = { home: 'OR Dose', adult: 'Adult', peds: 'Pediatrics', info: 'Info' };
+
+  $('#seg-adult').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    adultSection = b.dataset.v; update();
+  });
 
   function setTab(next) {
     tab = next;
     document.body.dataset.tab = tab;
     $('#page-title').textContent = TITLES[tab];
-    ['adult', 'calcs', 'peds', 'info'].forEach(t => { $('#tab-' + t).hidden = t !== tab; });
+    ['home', 'adult', 'peds', 'info'].forEach(t => { $('#tab-' + t).hidden = t !== tab; });
     $$('.tabbar button').forEach(b => { const on = b.dataset.tab === tab; b.classList.toggle('on', on); if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     window.scrollTo(0, 0);
     update();
@@ -711,13 +812,17 @@
 
   function update() {
     const m = metrics();
-    $('#new-patient').disabled = !(P.age || P.weight || P.height || P.sex);
+    $('#new-patient').disabled = !(P.age || P.weight || P.height || P.hgb || P.npo || P.sex);
     $('#field-weight').classList.toggle('missing', !P.weight.trim());
     renderSummary(m, tab);
     renderWarnings(tab);
-    if (tab === 'adult') renderAdult(m);
-    else if (tab === 'calcs') renderCalcs(m);
-    else if (tab === 'peds') renderPeds(m);
+    if (tab === 'home') renderHome(m);
+    else if (tab === 'adult') {
+      setSeg($('#seg-adult'), adultSection);
+      $('#adult-meds-panel').hidden = adultSection !== 'meds';
+      $('#adult-calcs-panel').hidden = adultSection !== 'calcs';
+      if (adultSection === 'meds') renderAdult(m); else renderCalcs(m);
+    } else if (tab === 'peds') renderPeds(m);
     else refreshInfo();
   }
 

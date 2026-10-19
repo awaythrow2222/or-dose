@@ -14,6 +14,11 @@ Offline mode needs HTTPS (localhost counts); opening index.html straight from di
 ## Updating
 Edit the files, then bump `CACHE` in `sw.js` (e.g. `ordose-v4`) so installed copies refresh.
 
+## Screens
+- **Home**: age, weight, height, starting Hgb, NPO time (+ sex) → ETT depth, maintenance rate and NPO deficit, tidal volume 4–6 mL/kg PBW, induction doses (propofol, rocuronium, succinylcholine), max allowable blood loss.
+- **Adult**: Meds (full list) and Calcs (more tidal volumes, both ETT-depth formulas, fluids by weight basis, blood-loss with editable blood volume).
+- **Pediatrics** and **Info**.
+
 ## Files
 - `calc.js`  body-weight formulas, dose/volume math, pediatric estimates (UI-free, unit-tested)
 - `data.js`  default drug table — review against your formulary before clinical use

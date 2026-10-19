@@ -236,7 +236,19 @@
       note: 'Bolus over 2–3 min, then 0.25 mL/kg/min.' })),
   ];
 
-  const api = { CATEGORIES, adult, pediatric };
+  // Home-screen induction drugs. They carry their own dose range (and highlighted weight) but always take their
+  // concentration from the matching drug in the Adult list (baseId), so a drug can never show two concentrations.
+  function homeVariant(baseId, low, high) {
+    const base = adult.find(m => m.id === baseId);
+    return Object.assign({}, base, { id: 'home_' + baseId, baseId, low, high });
+  }
+  const home = [
+    homeVariant('propofol', 0.5, 2),
+    homeVariant('rocuronium', 0.6, 0.6),
+    homeVariant('succinylcholine', 1, 1),
+  ];
+
+  const api = { CATEGORIES, adult, pediatric, home };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ORData = api;
 })(typeof self !== 'undefined' ? self : this);

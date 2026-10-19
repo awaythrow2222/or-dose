@@ -15,10 +15,10 @@
   <link rel="icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="styles.css">
 </head>
-<body data-tab="adult">
+<body data-tab="home">
 
   <header class="topbar">
-    <h1 id="page-title">Adult</h1>
+    <h1 id="page-title">OR Dose</h1>
     <button id="new-patient" class="icon-btn" type="button" aria-label="New patient" disabled>
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z" fill="currentColor"/></svg>
     </button>
@@ -28,7 +28,7 @@
 
   <main id="main">
 
-    <!-- Patient entry (shared by Adult and Pediatrics) -->
+    <!-- Patient entry (shared by every tab) -->
     <section id="patient-card" class="card" aria-label="Patient">
       <div class="fields">
         <div class="field">
@@ -57,6 +57,16 @@
           </div>
         </div>
       </div>
+      <div class="fields two extra-fields">
+        <div class="field">
+          <label for="in-hgb">Starting Hgb (g/dL)</label>
+          <input id="in-hgb" type="text" inputmode="decimal" autocomplete="off" placeholder="—" enterkeyhint="done">
+        </div>
+        <div class="field">
+          <label for="in-npo">NPO time (hours)</label>
+          <input id="in-npo" type="text" inputmode="decimal" autocomplete="off" placeholder="—" enterkeyhint="done">
+        </div>
+      </div>
       <div class="sex-row" id="sex-row">
         <span class="sex-label">Sex</span>
         <div class="seg wide" id="seg-sex" role="group" aria-label="Sex">
@@ -68,26 +78,40 @@
 
     <div id="warnings"></div>
 
-    <!-- ADULT -->
-    <section id="tab-adult" class="tab">
-      <div id="adult-empty" class="empty">
+    <!-- HOME -->
+    <section id="tab-home" class="tab">
+      <div id="home-empty" class="empty">
         <div class="empty-icon" aria-hidden="true">⚖</div>
         <h2>Enter a weight to begin</h2>
-        <p>Weight is the only required field. Add height and sex to unlock ideal and adjusted body weight dosing.</p>
+        <p>Weight is the only required field. Height, age, sex, starting Hgb and NPO time unlock the rest.</p>
       </div>
-      <div id="adult-body" hidden>
-        <details id="metrics-card" class="card metrics">
-          <summary><span class="h">Calculated values</span><span id="metrics-summary" class="muted small"></span></summary>
-          <div id="metrics-grid" class="tiles"></div>
-          <div id="metrics-notes"></div>
-        </details>
-        <div id="adult-meds"></div>
-      </div>
+      <div id="home-body" hidden></div>
     </section>
 
-    <!-- ADULT CALCS -->
-    <section id="tab-calcs" class="tab" hidden>
-      <div id="calcs-body"></div>
+    <!-- ADULT (everything else): Meds | Calcs -->
+    <section id="tab-adult" class="tab" hidden>
+      <div class="seg wide" id="seg-adult" role="tablist" aria-label="Adult section">
+        <button type="button" data-v="meds" class="on">Meds</button>
+        <button type="button" data-v="calcs">Calcs</button>
+      </div>
+      <div id="adult-meds-panel">
+        <div id="adult-empty" class="empty">
+          <div class="empty-icon" aria-hidden="true">⚖</div>
+          <h2>Enter a weight to begin</h2>
+          <p>Weight is the only required field. Add height and sex to unlock ideal and adjusted body weight dosing.</p>
+        </div>
+        <div id="adult-body" hidden>
+          <details id="metrics-card" class="card metrics">
+            <summary><span class="h">Calculated values</span><span id="metrics-summary" class="muted small"></span></summary>
+            <div id="metrics-grid" class="tiles"></div>
+            <div id="metrics-notes"></div>
+          </details>
+          <div id="adult-meds"></div>
+        </div>
+      </div>
+      <div id="adult-calcs-panel" hidden>
+        <div id="calcs-body"></div>
+      </div>
     </section>
 
     <!-- PEDIATRICS -->
@@ -160,13 +184,13 @@
   </main>
 
   <nav class="tabbar" aria-label="Sections">
-    <button type="button" data-tab="adult" class="on" aria-current="page">
+    <button type="button" data-tab="home" class="on" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/></svg>
+      <span>Home</span>
+    </button>
+    <button type="button" data-tab="adult">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-8 2.2-8 5v3h16v-3c0-2.8-3.6-5-8-5z"/></svg>
       <span>Adult</span>
-    </button>
-    <button type="button" data-tab="calcs">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 2h14a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm1 2v4h12V4zm1 6.5a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5zm5 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5zm5 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5zM7 15a1.25 1.25 0 1 0 0 2.5A1.25 1.25 0 0 0 7 15zm5 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5zm5 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5z"/></svg>
-      <span>Calcs</span>
     </button>
     <button type="button" data-tab="peds">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 7a2.6 2.6 0 1 0 0-5.2A2.6 2.6 0 0 0 12 7zm-6 2.5v2h4.5V22h3V11.5H18v-2z"/></svg>

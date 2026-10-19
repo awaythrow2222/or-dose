@@ -186,5 +186,33 @@ const clone = (m, over) => Object.assign({}, m, over);
   check(Peds.maxAllowableBloodLoss === maxAllowableBloodLoss, 'Peds shares MABL implementation');
 }
 
+// Home-screen induction drugs
+{
+  check(Data.home.length === 3, 'three home drugs');
+  const ids = Data.home.map(m => m.id);
+  check(new Set(ids).size === 3 && ids.every(i => i.startsWith('home_')), 'home ids unique + prefixed');
+  const all = Data.adult.concat(Data.pediatric).map(m => m.id);
+  check(ids.every(i => !all.includes(i)), 'home ids do not collide with list ids');
+  for (const h of Data.home) {
+    const base = Data.adult.find(m => m.id === h.baseId);
+    check(!!base, h.id + ' has a base drug');
+    check(h.concentration === base.concentration && h.presets === base.presets && h.concUnit === base.concUnit, h.id + ' shares concentration with base');
+    check(h.low > 0 && h.high >= h.low, h.id + ' range ordered');
+  }
+  const [prop, roc, sux] = Data.home;
+  // 70 kg: propofol 0.5–2 mg/kg @10 mg/mL → 35–140 mg, 3.5–14 mL
+  let r = computeDose(prop, 70);
+  near(r.doseLow, 35, 'home propofol low'); near(r.doseHigh, 140, 'home propofol high');
+  near(r.volumeLow, 3.5, 'home propofol vol low'); near(r.volumeHigh, 14, 'home propofol vol high');
+  // rocuronium 0.6 mg/kg @10 mg/mL → 42 mg, 4.2 mL
+  r = computeDose(roc, 70); near(r.doseLow, 42, 'home roc mg'); near(r.volumeHigh, 4.2, 'home roc mL');
+  // succinylcholine 1 mg/kg @20 mg/mL → 70 mg, 3.5 mL
+  r = computeDose(sux, 70); near(r.doseLow, 70, 'home sux mg'); near(r.volumeHigh, 3.5, 'home sux mL');
+  check(Fmt.perKg(prop) === '0.5–2 mg/kg' && Fmt.perKg(roc) === '0.6 mg/kg' && Fmt.perKg(sux) === '1 mg/kg', 'home per-kg labels');
+  // 4–6 mL/kg tidal volume at PBW 75.1 kg
+  near(Adult.tidalVolumeML(Adult.pbw(180, 'male'), 4), 300.5, 'TV 4 mL/kg', 0.5);
+  near(Adult.tidalVolumeML(Adult.pbw(180, 'male'), 6), 450.7, 'TV 6 mL/kg @180', 0.5);
+}
+
 console.log(`${checks - failures}/${checks} checks passed`);
 process.exit(failures ? 1 : 0);
